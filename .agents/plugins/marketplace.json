@@ -1,0 +1,20 @@
+{
+  "name": "agent-memory",
+  "interface": {
+    "displayName": "Agent Memory"
+  },
+  "plugins": [
+    {
+      "name": "agent-memory",
+      "source": {
+        "source": "local",
+        "path": "./plugins/agent-memory"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "agent-memory",
+  "version": "0.1.0",
+  "description": "pi、Codex、Claude Code 共用的本地记忆。数据在 ~/.agent-memory，不进仓库。",
+  "author": {
+    "name": "tfdx8045"
+  },
+  "license": "MIT",
+  "keywords": ["memory", "agents"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Memory",
+    "shortDescription": "三家共用的本地记忆",
+    "longDescription": "把 pi、Codex、Claude Code 的项目记忆和会话摘要放在家目录，开工时自动带上。不写进项目仓库。",
+    "developerName": "tfdx8045",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write"],
+    "defaultPrompt": [
+      "查一下我们之前定过的口径",
+      "把这个结论记到项目记忆里"
+    ]
+  }
+}
