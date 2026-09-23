@@ -34,6 +34,19 @@ codex plugin add agent-memory@agent-memory
 
 本机现在的 `pi install` 记的是相对路径 `../../code/agent-memory`，换机器会断。推到 GitHub 之后用上面的 `git:github.com/...` 形式。
 
+插件通道装的是缓存副本，不是仓库里的实时文件。改了 `SKILL.md` 或脚本之后，各端仍然跑旧缓存，直到重新装上。
+
+当前这种本地目录 marketplace，版本号不变时 `claude plugin update` 会回 `already at the latest version` 且不拷文件，`codex plugin marketplace upgrade` 会报 `marketplace is not configured as a Git marketplace`。这时要卸载重装：
+
+```bash
+claude plugin uninstall agent-memory@agent-memory && claude plugin install agent-memory@agent-memory --yes
+codex plugin remove agent-memory@agent-memory && codex plugin add agent-memory@agent-memory
+```
+
+发布到 GitHub 之后，用 `claude plugin marketplace add kettybluce/agent-memory` 和 `codex plugin marketplace add kettybluce/agent-memory` 装成 Git marketplace，那时 `claude plugin update` 和 `codex plugin marketplace upgrade` 才会拉新版本。也可以给 `plugin.json` 的 `version` 升一级，再走更新。
+
+`claude plugin enable` 会重写 `~/.claude/settings.json`，可能把 SessionStart hook 冲掉。改完设置后确认 `hooks.SessionStart` 还在（命令指向 `<仓库路径>/scripts/agent_memory.py sync -q`）。
+
 ## 启动时同步
 
 `~/.bashrc` 里的包装函数会在终端执行 `pi`、`codex`、`claude` 前跑 `sync -q`。Claude 另外有 SessionStart hook。
