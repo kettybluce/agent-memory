@@ -36,7 +36,31 @@ EOF
 - `--tool codex` 默认；`--tool pi` 走 `pi -p --mode json`。
 - codex 默认沙箱 `workspace-write`；只读调研用 `read-only`。
 - 任务书是给执行者的完整交接：背景 + 要改什么 + 约束（别动什么）+ **完成标准**（跑哪个测试/命令、什么算过）。
-- 立即返回 job id（形如 `d-20260924-105000`），不要轮询等待，先干别的，用户问起或需要结果时再查。
+- 立即返回 job id（形如 `d-20260924-105000-123456`），不要轮询等待，先干别的，用户问起或需要结果时再查。
+- 两个 agent 并行派单不会再因同一秒撞 job id；但仍必须使用不重叠的 cwd/文件范围。
+
+## 运行中通信（不要再手动进 Pi 窗口补发）
+
+Pi 正在模型回合中时，`follow` 会被拒绝；这时用 Messenger 收件箱通道给运行中的 agent 发 steer 消息：
+
+```bash
+# 查看当前真正存活的 Pi Messenger agent（自动过滤死 PID）
+agent-dispatch agents
+
+# 按 agent 名称发消息；默认等待 2 秒确认收件箱已被消费
+agent-dispatch message --to SagePhoenix "先停止当前重跑，读取现有校验结果后回复进度"
+agent-dispatch message --to VividBear - <<'EOF'
+只做本机验证，不要修改业务代码。完成后报告测试命令和退出码。
+EOF
+
+# 同一条指挥同时发给两个 agent（--to 可重复）
+agent-dispatch message --to SagePhoenix --to VividBear "汇报当前阶段、阻塞点和下一步；不要重复全量重跑"
+
+# 名称不确定时，可按 cwd 筛选；多个匹配时工具会拒绝猜测
+agent-dispatch message --cwd /home/tfdx8045/code/agent "同步当前阶段结果"
+```
+
+消息使用临时文件 + 原子 rename 投递，避免 `fs.watch` 在 JSON 尚未写完时被 Pi 读取。命令会报告「已消费」或「已进入收件箱但尚未消费」；后者应检查 `agents`、Pi 会话是否仍在模型回合中，而不是盲目重复发送造成重复执行。
 
 ## 跟踪与验收
 

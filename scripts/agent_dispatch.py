@@ -7,7 +7,9 @@
     agent_dispatch.py dispatch    派单：后台启动 codex exec / pi -p，立即返回 job id
     agent_dispatch.py status      job 状态（--id 看单个；缺省列全部）
     agent_dispatch.py log         job 输出（--id；--tail N 行；--last 只看最终回复）
-    agent_dispatch.py follow      向同一会话追加指令（codex=exec resume，pi=--session 文件续接）
+    agent_dispatch.py follow      向同一会话追加指令（job 已结束后；codex=exec resume，pi=--session 文件续接）
+    agent_dispatch.py agents      列出在线 Pi Messenger agent
+    agent_dispatch.py message     向运行中的 Pi Messenger agent 原子投递消息
     agent_dispatch.py stop        终止 job（SIGTERM 进程组）
     agent_dispatch.py gc          清理已结束超过 N 天的 job（默认 14 天）
 
@@ -27,6 +29,8 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+import time
 from pathlib import Path
 
 HOME = Path.home()
@@ -46,6 +50,72 @@ def one_line(text: str, limit: int) -> str:
 
 
 # ---------------------------------------------------------------- job 读写
+def atomic_write_json(path: Path, payload: dict) -> None:
+    """Write a complete message before exposing it to pi's fs.watch consumer."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(payload, f, ensure_ascii=False, indent=2)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_name, path)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+
+
+def is_process_alive(pid: int) -> bool:
+    return pid > 0 and pid_alive(pid)
+
+
+def messenger_root() -> Path:
+    return Path(os.environ.get("PI_MESSENGER_DIR", HOME / ".pi" / "agent" / "messenger")).expanduser()
+
+
+def active_agents() -> list[dict]:
+    root = messenger_root()
+    registry = root / "registry"
+    result = []
+    if not registry.is_dir():
+        return result
+    for path in sorted(registry.glob("*.json")):
+        try:
+            item = json.loads(path.read_text(encoding="utf-8"))
+            pid = int(item.get("pid", 0))
+            if not is_process_alive(pid):
+                continue
+            item["_registry"] = str(path)
+            result.append(item)
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+    return result
+
+
+def resolve_agents(names: list[str] | None, cwd: str | None = None) -> list[dict]:
+    agents = active_agents()
+    if names:
+        by_name = {str(a.get("name")): a for a in agents}
+        missing = [name for name in names if name not in by_name]
+        if missing:
+            available = ", ".join(by_name) or "（无在线 agent）"
+            sys.exit(f"message: 找不到在线 agent {', '.join(missing)}；当前在线: {available}")
+        # Preserve CLI order while avoiding duplicate delivery.
+        return [by_name[name] for name in dict.fromkeys(names)]
+
+    matches = [a for a in agents if not cwd or str(a.get("cwd", "")) == cwd]
+    if len(matches) == 1:
+        return matches
+    if not matches:
+        available = ", ".join(str(a.get("name")) for a in agents) or "（无在线 agent）"
+        sys.exit(f"message: 找不到在线 agent；当前在线: {available}")
+    names_text = ", ".join(str(a.get("name")) for a in matches)
+    sys.exit(f"message: 目标不唯一，请用 --to 指定 agent 名称: {names_text}")
+
+
 def job_dir(job_id: str) -> Path:
     d = JOBS_DIR / job_id
     if not d.is_dir():
@@ -155,7 +225,8 @@ def cmd_dispatch(args) -> None:
         sys.exit(f"dispatch: 工作目录不存在: {cwd}")
 
     JOBS_DIR.mkdir(parents=True, exist_ok=True)
-    job_id = dt.datetime.now().strftime("d-%Y%m%d-%H%M%S")
+    stamp = dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    job_id = f"d-{stamp}"
     d = JOBS_DIR / job_id
     d.mkdir()
     (d / "prompt.txt").write_text(prompt + "\n", encoding="utf-8")
@@ -186,6 +257,7 @@ def cmd_dispatch(args) -> None:
         "started_at": dt.datetime.now().isoformat(timespec="seconds"),
         "timeout_min": args.timeout,
         "cmd": cmd,
+        "agent_name": getattr(args, "agent_name", None),
     }
     save_job(job, d)
     print(f"job: {job_id}  tool: {args.tool}  cwd: {cwd}  sandbox: {args.sandbox}")
@@ -287,6 +359,60 @@ def cmd_follow(args) -> None:
     print(f"跟踪: agent-dispatch status --id {job['id']}")
 
 
+def cmd_agents(args) -> None:
+    agents = active_agents()
+    if not agents:
+        print("（无在线 agent）")
+        return
+    for agent in agents:
+        activity = agent.get("activity") or {}
+        print(f"{agent.get('name')} pid={agent.get('pid')} cwd={agent.get('cwd')} "
+              f"last={activity.get('lastActivityAt', agent.get('startedAt', '?'))} "
+              f"status={agent.get('statusMessage') or '-'}")
+
+
+def cmd_message(args) -> None:
+    targets = resolve_agents(args.to, args.cwd)
+    text = (args.message or "").strip()
+    if text == "-":
+        text = ""
+    if not text and not sys.stdin.isatty():
+        text = sys.stdin.read().strip()
+    if not text:
+        sys.exit("message: 缺少消息内容")
+    root = messenger_root()
+    results = []
+    for index, target in enumerate(targets):
+        inbox = root / "inbox" / str(target["name"])
+        message_id = f"{int(time.time() * 1000)}-{os.getpid()}-{index}"
+        path = inbox / f"{message_id}.json"
+        payload = {
+            "id": message_id,
+            "from": args.sender,
+            "to": target["name"],
+            "text": text,
+            "timestamp": dt.datetime.now(dt.timezone.utc).isoformat(),
+            "replyTo": None,
+        }
+        atomic_write_json(path, payload)
+        results.append((target["name"], message_id, path))
+
+    deadline = time.monotonic() + args.verify
+    pending = {path for _, _, path in results}
+    while pending and time.monotonic() < deadline:
+        pending = {path for path in pending if path.exists()}
+        if pending:
+            time.sleep(0.1)
+
+    for name, message_id, path in results:
+        if path.exists():
+            print(f"消息已投递到 {name} 收件箱，尚未消费 ({message_id})")
+        else:
+            print(f"消息已消费: {name} ({message_id})")
+    if pending:
+        print("部分消息尚未消费：agent 可能正在模型回合中、watcher 未启动或已卡住；不要盲目重复发送。")
+
+
 def cmd_stop(args) -> None:
     d = job_dir(args.id)
     job = refresh(load_job(d), d)
@@ -368,6 +494,7 @@ def main() -> None:
     p.add_argument("--cwd", help="执行者的工作目录（默认当前目录）")
     p.add_argument("--sandbox", choices=SANDBOX_CHOICES, default="workspace-write", help="codex 沙箱级别")
     p.add_argument("--timeout", type=int, default=30, help="超时提醒阈值（分钟，仅提醒不杀）")
+    p.add_argument("--agent-name", help="记录关联的 Pi Messenger agent 名称")
     p.add_argument("--extra", nargs=argparse.REMAINDER, help="透传底层 CLI 的附加参数，放最后")
     p.set_defaults(fn=cmd_dispatch)
 
@@ -388,6 +515,17 @@ def main() -> None:
     p.add_argument("--sandbox", choices=SANDBOX_CHOICES)
     p.add_argument("--session", help="手动指定会话 id（codex）或 session 文件路径（pi）")
     p.set_defaults(fn=cmd_follow)
+
+    p = sub.add_parser("agents", help="列出 Pi Messenger 在线 agent")
+    p.set_defaults(fn=cmd_agents)
+
+    p = sub.add_parser("message", help="向运行中的 Pi Messenger agent 原子投递消息")
+    p.add_argument("--to", action="append", help="目标 agent 名称；可重复指定多个 agent")
+    p.add_argument("--cwd", help="未指定 --to 时按工作目录筛选")
+    p.add_argument("--sender", default="ClaudeSupervisor", help="消息发送者名称")
+    p.add_argument("--verify", type=float, default=2.0, help="等待收件箱消费的秒数")
+    p.add_argument("message", nargs="?", help="消息内容；- 或省略时从 stdin 读取")
+    p.set_defaults(fn=cmd_message)
 
     p = sub.add_parser("stop", help="终止 job")
     p.add_argument("--id", required=True)
