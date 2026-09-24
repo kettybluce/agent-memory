@@ -34,12 +34,28 @@ EOF
 ```
 
 - `--tool codex` 默认；`--tool pi` 走 `pi -p --mode json`。
+- job 会登记为 `codex-<job-id>` 或 `pi-<job-id>`；可用 `--agent-name` 固定名称，便于 Claude、Pi 互发消息。
 - codex 默认沙箱 `workspace-write`；只读调研用 `read-only`。
 - 任务书是给执行者的完整交接：背景 + 要改什么 + 约束（别动什么）+ **完成标准**（跑哪个测试/命令、什么算过）。
 - 立即返回 job id（形如 `d-20260924-105000-123456`），不要轮询等待，先干别的，用户问起或需要结果时再查。
 - 两个 agent 并行派单不会再因同一秒撞 job id；但仍必须使用不重叠的 cwd/文件范围。
 
-## 运行中通信（不要再手动进 Pi 窗口补发）
+## 统一通信（Pi / Codex / Claude）
+
+三类 agent 共用一份消息 inbox：Pi 使用 `PI_MESSENGER_DIR` 下的原生 registry/inbox；Claude、Codex 的身份登记在 `~/.agent-dispatch/mesh/registry/`，但收件箱与 Pi 共用 `PI_MESSENGER_DIR/inbox/`。因此 Pi 原生 `pi_messenger({ action: "send" })` 和 `agent-dispatch message` 可以互相投递，不再有第二套收件箱。
+
+非 Pi agent 启动后登记并轮询收件箱：
+
+```bash
+agent-dispatch register --name ClaudeSupervisor --type claude --cwd "$PWD"
+agent-dispatch register --name CodexWorker --type codex --cwd "$PWD"
+agent-dispatch inbox --name ClaudeSupervisor --consume
+agent-dispatch message --to CodexWorker --sender ClaudeSupervisor "请汇报当前阶段"
+```
+
+`dispatch --tool codex` / `dispatch --tool pi` 会自动登记 job agent，并把身份、发送和收件箱命令注入任务书。Codex/Claude 不是常驻 Messenger 进程，必须在关键节点主动执行 `inbox --consume`；消息会持久化，不会因模型正在思考而丢失。`agents` 同时列出 Pi 和 dispatch mesh 中的 agent。
+
+### Pi 运行中通信
 
 Pi 正在模型回合中时，`follow` 会被拒绝；这时用 Messenger 收件箱通道给运行中的 agent 发 steer 消息：
 
@@ -60,7 +76,19 @@ agent-dispatch message --to SagePhoenix --to VividBear "汇报当前阶段、阻
 agent-dispatch message --cwd /home/tfdx8045/code/agent "同步当前阶段结果"
 ```
 
-消息使用临时文件 + 原子 rename 投递，避免 `fs.watch` 在 JSON 尚未写完时被 Pi 读取。命令会报告「已消费」或「已进入收件箱但尚未消费」；后者应检查 `agents`、Pi 会话是否仍在模型回合中，而不是盲目重复发送造成重复执行。
+### 防「假发送」
+
+给 pi 的指令必须明确要求：回复要用 `pi_messenger({ action: "send", to: "<监督方名>", message: "..." })`；缺 `action` 会回退成 `status`，导致消息丢失。消息使用临时文件 + 原子 rename 投递，避免 `fs.watch` 在 JSON 尚未写完时被 Pi 读取。命令会报告「已消费」或「已进入收件箱但尚未消费」；后者应检查 `agents`、Pi 会话是否仍在模型回合中，而不是盲目重复发送。若对方是 pi，还要检查其回复是否缺 `action:"send"`；缺省会回退成 `status` 丢消息。
+
+## 停滞自动唤醒
+
+当 agent 停在等待回复、没有进入下一轮时，可启动前台哨兵轮询 registry 的 `lastActivityAt`，超过阈值自动向其收件箱投递唤醒消息：
+
+```bash
+agent-dispatch watch --to SagePhoenix --stall 300 --interval 30 --max-nudges 10
+```
+
+`watch` 同时支持 Pi registry 和 dispatch mesh registry；消息被消费或检测到活动恢复后会重新计时。registry 暂时不存在时也会按无活动处理并尝试投递，便于排查收件箱链路。日志打 stdout（时间戳 + 事件），达到 `--max-nudges` 上限自动退出，按 `Ctrl-C` 可退出。
 
 ## 跟踪与验收
 
