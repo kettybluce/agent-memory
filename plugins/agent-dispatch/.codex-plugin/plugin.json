@@ -1,0 +1,23 @@
+{
+  "name": "agent-dispatch",
+  "version": "0.1.0",
+  "description": "Claude 当大脑，把实现/测试类工作派给 codex / pi 后台执行并回收验收。数据在 ~/.agent-dispatch，不进仓库。",
+  "author": {
+    "name": "tfdx8045"
+  },
+  "license": "MIT",
+  "keywords": ["dispatch", "codex", "pi", "orchestration"],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Agent Dispatch",
+    "shortDescription": "Claude 大脑派活给 codex / pi",
+    "longDescription": "Claude 负责设计与验收，codex / pi 作为执行端后台跑实现与测试。job 数据在家目录，不写进项目仓库。",
+    "developerName": "tfdx8045",
+    "category": "Productivity",
+    "capabilities": ["Read", "Write", "Command"],
+    "defaultPrompt": [
+      "把这个需求拆成任务书派给 codex",
+      "看一下派出去的 job 进度"
+    ]
+  }
+}

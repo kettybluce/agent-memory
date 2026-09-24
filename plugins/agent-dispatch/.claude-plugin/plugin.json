@@ -1,0 +1,10 @@
+{
+  "name": "agent-dispatch",
+  "version": "0.1.0",
+  "description": "Claude 当大脑，把实现/测试类工作派给 codex / pi 后台执行并回收验收。数据在 ~/.agent-dispatch，不进仓库。",
+  "author": {
+    "name": "tfdx8045"
+  },
+  "license": "MIT",
+  "skills": "./skills/"
+}

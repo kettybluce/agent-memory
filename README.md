@@ -1,6 +1,13 @@
 # agent-memory
 
-pi、Codex、Claude Code 共用一份本地记忆。仓库里只有代码，记忆在 `~/.agent-memory/`，不进 Git，也不写进项目目录。
+pi、Codex、Claude Code 共用一份本地记忆 + 一个派单工具。仓库里只有代码，数据在 `~/.agent-memory/` 和 `~/.agent-dispatch/`，不进 Git，也不写进项目目录。
+
+## 插件
+
+| 插件 | 作用 |
+|---|---|
+| `agent-memory` | 三端共用的本地记忆（跨项目层 + 项目层） |
+| `agent-dispatch` | Claude 当大脑，把实现/测试类工作派给 codex / pi 后台执行，回收结果并验收 |
 
 ## 安装
 
@@ -17,6 +24,24 @@ python3 ~/code/agent-memory/scripts/agent_memory.py init --workspace <项目目�
 两条都指向 `plugins/agent-memory/skills/agent-memory`。不会写 `~/.codex/skills`（那是旧路径，会和上面重复）。
 
 换机器时单独拷贝 `~/.agent-memory/`，再跑一次 `init`。
+
+## agent-dispatch 单独接线
+
+记忆的 `init` 不管 dispatch；dispatch 用自己的脚本接线（建 `~/.agent-dispatch/`、bin 垫片、三端技能软链）：
+
+```bash
+python3 ~/code/agent-memory/scripts/agent_dispatch.py init
+```
+
+用前确认执行端可用：`codex --version && pi --version`。派单示例与验收纪律见技能内容（对 Claude 说「派给 codex」即可触发）。
+
+```bash
+~/.agent-dispatch/bin/agent-dispatch dispatch --tool codex --cwd <项目目录> \
+  --sandbox workspace-write "任务书：…完成标准：测试全绿"
+~/.agent-dispatch/bin/agent-dispatch status
+~/.agent-dispatch/bin/agent-dispatch log --id <job> --last
+~/.agent-dispatch/bin/agent-dispatch follow --id <job> "补充指令"
+```
 
 ## 原生插件通道
 

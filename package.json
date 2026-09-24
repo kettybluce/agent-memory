@@ -5,6 +5,6 @@
   "keywords": ["pi-package"],
   "license": "MIT",
   "pi": {
-    "skills": ["./plugins/agent-memory/skills"]
+    "skills": ["./plugins/agent-memory/skills", "./plugins/agent-dispatch/skills"]
   }
 }
